@@ -1,0 +1,104 @@
+#include <iostream>
+#include <cstring>
+#include <csignal>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <fcntl.h>
+#include <cassert>
+
+volatile sig_atomic_t signal_received = 0;
+
+void signal_handler(int signal) {
+    if (signal == SIGHUP) {
+        signal_received = 1;
+        std::cout << "Received SIGHUP signal!" << std::endl;
+    }
+}
+
+int main() {
+    struct sigaction sa;
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGHUP, &sa, nullptr) == -1) {
+        std::cerr << "Error setting up signal handler." << std::endl;
+        return 1;
+    }
+
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        std::cerr << "Error creating socket." << std::endl;
+        return 1;
+    }
+
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        std::cerr << "Error setting socket options." << std::endl;
+        close(server_fd);
+        return 1;
+    }
+
+    sockaddr_in address;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(8080);
+
+    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        std::cerr << "Error binding socket." << std::endl;
+        close(server_fd);
+        return 1;
+    }
+
+    if (listen(server_fd, 1) < 0) {
+        std::cerr << "Error listening on socket." << std::endl;
+        close(server_fd);
+        return 1;
+    }
+
+    std::cout << "Server listening on port 8080..." << std::endl;
+
+    while (true) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(server_fd, &readfds);
+        int max_fd = server_fd;
+
+        if (select(max_fd + 1, &readfds, nullptr, nullptr, nullptr) < 0) {
+            std::cerr << "Error with select." << std::endl;
+            break;
+        }
+
+        if (FD_ISSET(server_fd, &readfds)) {
+            sockaddr_in client_address;
+            socklen_t client_len = sizeof(client_address);
+            int client_fd = accept(server_fd, (struct sockaddr*)&client_address, &client_len);
+            if (client_fd < 0) {
+                std::cerr << "Error accepting connection." << std::endl;
+                continue;
+            }
+
+            std::cout << "New connection accepted." << std::endl;
+
+            close(client_fd);
+
+            char buffer[1024];
+            ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer));
+            if (bytes_read > 0) {
+                std::cout << "Received " << bytes_read << " bytes from client." << std::endl;
+            }
+
+            close(client_fd);
+        }
+
+        if (signal_received) {
+            std::cout << "Handling signal..." << std::endl;
+            signal_received = 0;
+        }
+    }
+
+    close(server_fd);
+    return 0;
+}
