@@ -14,11 +14,11 @@
 #define BACKLOG 5
 #define BUF_SIZE 1024
 
-volatile sig_atomic_t signal_received = 0;
+volatile sig_atomic_t stop_server = 0;
 
 void handle_signal(int sig) {
     if (sig == SIGHUP) {
-        signal_received = 1;
+        stop_server = 1;
     }
 }
 
@@ -67,10 +67,10 @@ int main() {
     printf("Сервер запущен на порту %d\n", PORT);
 
     while (1) {
-        // Ждем входящего соединения с помощью pselect()
+        // Ожидание клиента с использованием pselect
         fd_set read_fds;
         struct timeval timeout;
-        timeout.tv_sec = 1;
+        timeout.tv_sec = 5; // Ожидание 5 секунд
         timeout.tv_usec = 0;
 
         // Формируем набор дескрипторов для pselect
@@ -84,7 +84,7 @@ int main() {
         }
 
         // Проверяем наличие сигнала SIGHUP
-        if (signal_received) {
+        if (stop_server) {
             printf("Получен сигнал SIGHUP, завершение работы...\n");
             break;
         }
@@ -104,7 +104,7 @@ int main() {
             ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
             if (bytes_received > 0) {
                 buffer[bytes_received] = '\0'; // Завершаем строку
-                printf("Получено %zd байт данных: %s\n", bytes_received, buffer);
+                printf("Получено %zd байт данных\n", bytes_received);
             } else if (bytes_received == 0) {
                 printf("Соединение закрыто клиентом\n");
             } else {
