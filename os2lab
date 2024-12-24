@@ -1,104 +1,122 @@
-#include <iostream>
-#include <cstring>
-#include <csignal>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <sys/select.h>
 #include <fcntl.h>
-#include <cassert>
+#include <poll.h>
+
+#define PORT 12345
+#define BACKLOG 5
+#define BUF_SIZE 1024
 
 volatile sig_atomic_t signal_received = 0;
 
-void signal_handler(int signal) {
-    if (signal == SIGHUP) {
+void handle_signal(int sig) {
+    if (sig == SIGHUP) {
         signal_received = 1;
-        std::cout << "Received SIGHUP signal!" << std::endl;
     }
 }
 
-int main() {
+void setup_signal_handler() {
     struct sigaction sa;
-    sa.sa_handler = signal_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_signal;
+    sigaction(SIGHUP, &sa, NULL);
+}
 
-    if (sigaction(SIGHUP, &sa, nullptr) == -1) {
-        std::cerr << "Error setting up signal handler." << std::endl;
-        return 1;
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+    char buffer[BUF_SIZE];
+
+    // Установка обработчика сигналов
+    setup_signal_handler();
+
+    // Создаем TCP-серверный сокет
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
     }
 
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        std::cerr << "Error creating socket." << std::endl;
-        return 1;
-    }
+    // Настраиваем адрес сокета
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
 
-    int opt = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        std::cerr << "Error setting socket options." << std::endl;
+    // Привязываем сокет к адресу
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
         close(server_fd);
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
-    sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(8080);
-
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        std::cerr << "Error binding socket." << std::endl;
+    // Прослушиваем входящие соединения
+    if (listen(server_fd, BACKLOG) < 0) {
+        perror("listen");
         close(server_fd);
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
-    if (listen(server_fd, 1) < 0) {
-        std::cerr << "Error listening on socket." << std::endl;
-        close(server_fd);
-        return 1;
-    }
+    printf("Сервер запущен на порту %d\n", PORT);
 
-    std::cout << "Server listening on port 8080..." << std::endl;
+    while (1) {
+        // Ждем входящего соединения с помощью pselect()
+        fd_set read_fds;
+        struct timeval timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
 
-    while (true) {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(server_fd, &readfds);
-        int max_fd = server_fd;
+        // Формируем набор дескрипторов для pselect
+        FD_ZERO(&read_fds);
+        FD_SET(server_fd, &read_fds);
 
-        if (select(max_fd + 1, &readfds, nullptr, nullptr, nullptr) < 0) {
-            std::cerr << "Error with select." << std::endl;
+        int activity = pselect(server_fd + 1, &read_fds, NULL, NULL, &timeout, NULL);
+        if (activity < 0) {
+            perror("pselect");
             break;
         }
 
-        if (FD_ISSET(server_fd, &readfds)) {
-            sockaddr_in client_address;
-            socklen_t client_len = sizeof(client_address);
-            int client_fd = accept(server_fd, (struct sockaddr*)&client_address, &client_len);
+        // Проверяем наличие сигнала SIGHUP
+        if (signal_received) {
+            printf("Получен сигнал SIGHUP, завершение работы...\n");
+            break;
+        }
+
+        // Проверяем, готов ли серверный сокет к чтению
+        if (FD_ISSET(server_fd, &read_fds)) {
+            // Принимаем новое соединение
+            client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
             if (client_fd < 0) {
-                std::cerr << "Error accepting connection." << std::endl;
+                perror("accept");
                 continue;
             }
 
-            std::cout << "New connection accepted." << std::endl;
+            printf("Новое соединение принято\n");
 
-            close(client_fd);
-
-            char buffer[1024];
-            ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer));
-            if (bytes_read > 0) {
-                std::cout << "Received " << bytes_read << " bytes from client." << std::endl;
+            // Обрабатываем соединение
+            ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+            if (bytes_received > 0) {
+                buffer[bytes_received] = '\0'; // Завершаем строку
+                printf("Получено %zd байт данных: %s\n", bytes_received, buffer);
+            } else if (bytes_received == 0) {
+                printf("Соединение закрыто клиентом\n");
+            } else {
+                perror("recv");
             }
 
+            // Закрываем клиентский сокет
             close(client_fd);
-        }
-
-        if (signal_received) {
-            std::cout << "Handling signal..." << std::endl;
-            signal_received = 0;
         }
     }
 
+    // Закрываем серверный сокет перед выходом
     close(server_fd);
     return 0;
 }
