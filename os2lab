@@ -1,75 +1,109 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <sys/socket.h>
+#include <string.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <signal.h>
 
-#define PORT 8080
+#define PORT 8888
 
-int server_socket;
+void handle_connection(int client_socket) {
+    char buffer[1024];
+    int bytes_received;
 
-void sig_handler(int signo) {
-    if (signo == SIGHUP) {
-        printf("Received SIGHUP signal\n");
+    bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+    if (bytes_received > 0) {
+        printf("Received data from client: %d bytes\n", bytes_received);
     }
 }
 
-void *connection_handler(void *socket_desc) {
-    int new_socket = *(int *)socket_desc;
-    char buffer[1024] = {0};
-    int valread;
-    
-    printf("New connection accepted\n");
-
-    while ((valread = read(new_socket, buffer, 1024)) > 0) {
-        printf("Received data: %d bytes\n", valread);
-    }
-
-    close(new_socket);
-    return NULL;
+void handle_signal(int signal) {
+    printf("Received signal: %d\n", signal);
 }
 
 int main() {
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
+    struct sockaddr_in server_addr, client_addr;
+    int server_socket, client_socket, addr_len, maxfd, ret;
+    fd_set readfds;
+    struct sigaction sa;
 
-    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("Socket failed");
+    // Set up signal handler
+    sa.sa_handler = handle_signal;
+    sa.sa_flags = SA_RESTART;
+    sigfillset(&sa.sa_mask);
+    sigaction(SIGHUP, &sa, NULL);
+
+    // Create server socket
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0) {
+        perror("Failed to create server socket");
         exit(EXIT_FAILURE);
     }
 
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
 
-    if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("Bind failed");
+    if (bind(server_socket, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
+        perror("Failed to bind server socket");
         exit(EXIT_FAILURE);
     }
 
-    if (listen(server_socket, 3) < 0) {
-        perror("Listen failed");
+    if (listen(server_socket, 5) < 0) {
+        perror("Failed to listen on server socket");
         exit(EXIT_FAILURE);
     }
 
-    signal(SIGHUP, sig_handler);
+    FD_ZERO(&readfds);
+    FD_SET(server_socket, &readfds);
+    maxfd = server_socket;
 
     while (1) {
-        int new_socket;
-        pthread_t thread_id;
+        fd_set tmpfds = readfds;
 
-        if ((new_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t *)&addrlen)) < 0) {
-            perror("Accept failed");
+        ret = pselect(maxfd + 1, &tmpfds, NULL, NULL, NULL, NULL);
+        if (ret < 0) {
+            perror("pselect error");
             continue;
         }
 
-        pthread_create(&thread_id, NULL, connection_handler, (void *)&new_socket);
-        pthread_detach(thread_id);
-    }
+        if (FD_ISSET(server_socket, &tmpfds)) {
+            addr_len = sizeof(client_addr);
+            client_socket = accept(server_socket, (struct sockaddr *) &client_addr, &addr_len);
+            if (client_socket < 0) {
+                perror("Failed to accept client connection");
+                continue;
+            }
 
-    close(server_socket);
+            printf("New connection accepted\n");
+
+            if (client_socket > maxfd) {
+                maxfd = client_socket;
+            }
+
+            FD_SET(client_socket, &readfds);
+
+            // Close all other connections
+            for (int fd = 0; fd <= maxfd; fd++) {
+                if (fd != server_socket && fd != client_socket && FD_ISSET(fd, &readfds)) {
+                    close(fd);
+                    FD_CLR(fd, &readfds);
+                }
+            }
+
+            continue;
+        }
+
+        for (int fd = 0; fd <= maxfd; fd++) {
+            if (FD_ISSET(fd, &tmpfds)) {
+                if (fd != server_socket) {
+                    handle_connection(fd);
+                }
+            }
+        }
+    }
 
     return 0;
 }
