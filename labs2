@@ -1,0 +1,114 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <poll.h>
+
+#define PORT 8080
+#define BACKLOG 5
+#define BUF_SIZE 1024
+
+volatile sig_atomic_t stop_server = 0;
+
+void sig_handler(int signo) {
+    if (signo == SIGHUP) {
+        printf("Received SIGHUP signal\n");
+        stop_server = 1;
+    }
+}
+
+int main() {
+    int server_socket;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+    char buffer[BUF_SIZE];
+
+    // Установка обработчика сигнала
+    signal(SIGHUP, sig_handler);
+
+    // Создаем сокет
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Установка адреса сокета
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    // Привязка сокета к адресу
+    if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Прослушивание входящих соединений
+    if (listen(server_socket, BACKLOG) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server running on port %d\n", PORT);
+
+    // Основной цикл
+    while (1) {
+        fd_set read_fds;
+        struct timeval timeout;
+
+        // Подготовка к pselect
+        FD_ZERO(&read_fds);
+        FD_SET(server_socket, &read_fds);
+
+        // Устанавливаем тайм-аут
+        timeout.tv_sec = 1; // через 1 секунду
+        timeout.tv_usec = 0;
+
+        // Используем pselect для ожидаемых событий
+        int activity = pselect(server_socket + 1, &read_fds, NULL, NULL, &timeout, NULL);
+        if (activity < 0) {
+            perror("pselect error");
+            continue;
+        }
+
+        // Проверяем, получен ли сигнал SIGHUP
+        if (stop_server) {
+            printf("Shutting down server...\n");
+            break;
+        }
+
+        // Проверяем, доступен ли серверный сокет
+        if (FD_ISSET(server_socket, &read_fds)) {
+            int new_socket;
+
+            // Принимаем новое соединение
+            if ((new_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t *)&addrlen)) < 0) {
+                perror("Accept failed");
+                continue;
+            }
+
+            printf("New connection accepted\n");
+
+            // Чтение данных из нового соединения
+            ssize_t bytes_received = read(new_socket, buffer, BUF_SIZE - 1);
+            if (bytes_received > 0) {
+                buffer[bytes_received] = '\0'; // Завершение строки
+                printf("Received data: %zd bytes\n", bytes_received);
+            } else if (bytes_received == 0) {
+                printf("Connection closed by the client\n");
+            } else {
+                perror("Read error");
+            }
+
+            // Закрываем новый сокет
+            close(new_socket);
+        }
+    }
+
+    // Закрываем серверный сокет перед выходом
+    close(server_socket);
+    return 0;
+}
