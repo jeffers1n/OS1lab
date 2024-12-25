@@ -1,97 +1,75 @@
-#include <iostream>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/select.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
-static int current_conn = -1;
+#define PORT 8080
 
-void handle_connection(int sockfd) {
-    struct sockaddr_in client_addr;
-    socklen_t addrlen = sizeof(client_addr);
-    int connfd = accept(sockfd, (struct sockaddr *)&client_addr, &addrlen);
-    if (connfd < 0) {
-        perror("Error accepting connection");
-        return;
-    }
+int server_socket;
 
-    if (current_conn == -1) {
-        current_conn = connfd;
-        std::cout << "Accepted new connection" << std::endl;
-    } else {
-        close(connfd);
-        std::cout << "Rejected new connection" << std::endl;
+void sig_handler(int signo) {
+    if (signo == SIGHUP) {
+        printf("Received SIGHUP signal\n");
     }
 }
 
-void handle_data() {
-    // handle data received from current_conn
-    // For simplicity, here we just print the amount of data received
-    int data_count = 0;
-    // Code to read data from current_conn and update data_count
-    std::cout << "Received " << data_count << " bytes of data" << std::endl;
-}
+void *connection_handler(void *socket_desc) {
+    int new_socket = *(int *)socket_desc;
+    char buffer[1024] = {0};
+    int valread;
+    
+    printf("New connection accepted\n");
 
-void handle_signal(int signal) {
-    std::cout << "Received signal " << signal << std::endl;
-    // Do something in response to the signal
+    while ((valread = read(new_socket, buffer, 1024)) > 0) {
+        printf("Received data: %d bytes\n", valread);
+    }
+
+    close(new_socket);
+    return NULL;
 }
 
 int main() {
-    // Create a TCP socket
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        perror("Error creating socket");
-        return 1;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket failed");
+        exit(EXIT_FAILURE);
     }
 
-    // Bind the socket to a port
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(12345); // Port number
-    if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Error binding socket");
-        return 1;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
     }
 
-    // Listen for incoming connections
-    if (listen(sockfd, 5) < 0) {
-        perror("Error listening on socket");
-        return 1;
+    if (listen(server_socket, 3) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
     }
 
-    // Set up signal handler
-    signal(SIGHUP, handle_signal);
+    signal(SIGHUP, sig_handler);
 
     while (1) {
-        // Set up the file descriptors for select
-        fd_set read_set;
-        FD_ZERO(&read_set);
-        FD_SET(sockfd, &read_set);
-        if (current_conn != -1) {
-            FD_SET(current_conn, &read_set);
+        int new_socket;
+        pthread_t thread_id;
+
+        if ((new_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t *)&addrlen)) < 0) {
+            perror("Accept failed");
+            continue;
         }
 
-        // Wait for any activity on the socket or current_conn
-        if (pselect(FD_SETSIZE, &read_set, NULL, NULL, NULL, NULL) < 0) {
-            perror("Error in pselect");
-            return 1;
-        }
-
-        // Accept new connections
-        if (FD_ISSET(sockfd, &read_set)) {
-            handle_connection(sockfd);
-        }
-
-        // Handle data on current connection
-        if (current_conn != -1 && FD_ISSET(current_conn, &read_set)) {
-            handle_data();
-        }
+        pthread_create(&thread_id, NULL, connection_handler, (void *)&new_socket);
+        pthread_detach(thread_id);
     }
+
+    close(server_socket);
 
     return 0;
 }
