@@ -6,125 +6,124 @@
 #include <cstring>
 #include <cerrno>
 
-#define SERVER_PORT 8888
-#define BUFFER_SIZE 1024
+#define PORT 8888
+#define BUF_SIZE 1024
 
-volatile sig_atomic_t sighup_received = 0;
-int client_socket = -1;
+volatile sig_atomic_t hangup_flag = 0;
+int active_client_socket = -1;
 
-void handle_sighup(int sig) {
-    sighup_received = 1;
+void sighup_handler(int sig) {
+    hangup_flag = 1;
 }
 
-void close_socket(int sock) {
+void shutdown_socket(int sock) {
     if (sock != -1) {
         close(sock);
-        std::cerr << "Сокет закрыт.n";
+        std::cerr << "Сокет было закрыт." << std::endl;
     }
 }
 
 int main() {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handle_sighup;
+    sa.sa_handler = sighup_handler;
+    
     if (sigaction(SIGHUP, &sa, nullptr) == -1) {
-        perror("Ошибка установки обработчика сигнала");
+        perror("Не удалось установить обработчик сигнала");
         return 1;
     }
 
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == -1) {
-        perror("Ошибка создания сокета");
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket == -1) {
+        perror("Не удалось создать сокет");
         return 1;
     }
 
-    sockaddr_in server_address;
-    memset(&server_address, 0, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY;
-    server_address.sin_port = htons(SERVER_PORT);
+    sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
 
-    if (bind(server_fd, (sockaddr*)&server_address, sizeof(server_address)) == -1) {
-        perror("Ошибка привязки сокета");
-        close_socket(server_fd);
+    if (bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
+        perror("Ошибка при привязке сокета");
+        shutdown_socket(server_socket);
         return 1;
     }
 
-    if (listen(server_fd, 1) == -1) {
-        perror("Ошибка прослушивания порта");
-        close_socket(server_fd);
+    if (listen(server_socket, 1) == -1) {
+        perror("Ошибка при прослушивании порта");
+        shutdown_socket(server_socket);
         return 1;
     }
 
-    std::cout << "Сервер запущен, порт " << SERVER_PORT << std::endl;
+    std::cout << "Сервер успешно запущен на порту " << PORT << std::endl;
 
-    fd_set readfds;
-    sigset_t blocked_signals, original_mask;
+    fd_set read_fds;
+    sigset_t block_mask, original_mask;
 
-    sigemptyset(&blocked_signals);
-    sigaddset(&blocked_signals, SIGHUP);
-    if (sigprocmask(SIG_BLOCK, &blocked_signals, &original_mask) == -1) {
-        perror("Ошибка блокировки сигналов");
-        close_socket(server_fd);
+    sigemptyset(&block_mask);
+    sigaddset(&block_mask, SIGHUP);
+    
+    if (sigprocmask(SIG_BLOCK, &block_mask, &original_mask) == -1) {
+        perror("Ошибка при блокировке сигналов");
+        shutdown_socket(server_socket);
         return 1;
     }
-
 
     while (true) {
-        if (sighup_received) {
-            std::cout << "Получен сигнал SIGHUP. Завершение работы.n";
-            sighup_received = 0;
-            close_socket(server_fd);
-            close_socket(client_socket);
+        if (hangup_flag) {
+            std::cout << "Получен сигнал SIGHUP. Завершение работы." << std::endl;
+            hangup_flag = 0;
+            shutdown_socket(server_socket);
+            shutdown_socket(active_client_socket);
             sigprocmask(SIG_SETMASK, &original_mask, NULL);
             return 0;
         }
 
-        FD_ZERO(&readfds);
-        FD_SET(server_fd, &readfds);
-        if (client_socket != -1)
-            FD_SET(client_socket, &readfds);
+        FD_ZERO(&read_fds);
+        FD_SET(server_socket, &read_fds);
+        if (active_client_socket != -1)
+            FD_SET(active_client_socket, &read_fds);
 
-        int max_fd = std::max(server_fd, client_socket);
-
-        int sel_result = pselect(max_fd + 1, &readfds, nullptr, nullptr, nullptr, &original_mask);
-        if (sel_result == -1) {
+        int max_fd = std::max(server_socket, active_client_socket);
+        int select_result = pselect(max_fd + 1, &read_fds, nullptr, nullptr, nullptr, &original_mask);
+        if (select_result == -1) {
             if (errno == EINTR) continue;
-            perror("Ошибка pselect");
+            perror("Ошибка при выборке дескрипторов");
             break;
         }
 
-
-        if (FD_ISSET(server_fd, &readfds)) {
-            sockaddr_in client_address;
-            socklen_t client_len = sizeof(client_address);
-            int new_client_socket = accept(server_fd, (sockaddr*)&client_address, &client_len);
-            if (new_client_socket == -1) {
-                perror("Ошибка принятия соединения");
+        if (FD_ISSET(server_socket, &read_fds)) {
+            sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int new_socket = accept(server_socket, (sockaddr*)&client_addr, &client_len);
+            if (new_socket == -1) {
+                perror("Ошибка при принятии соединения");
                 continue;
             }
-            std::cout << "Новое соединение принято.n";
-            close_socket(client_socket);
-            client_socket = new_client_socket;
-
+            std::cout << "Клиент успешно подключен." << std::endl;
+            shutdown_socket(active_client_socket);
+            active_client_socket = new_socket;
         }
 
-        if (client_socket != -1 && FD_ISSET(client_socket, &readfds)) {
-            char buffer[BUFFER_SIZE];
-            ssize_t bytes_read = recv(client_socket, buffer, BUFFER_SIZE -1, 0);
-            if (bytes_read > 0) {
-                buffer[bytes_read] = '0';
-                std::cout << "Получено " << bytes_read << " байт: " << buffer << std::endl;
-            } else if (bytes_read == 0) {
-                std::cout << "Клиент закрыл соединение.n";
-                close_socket(client_socket);
-                client_socket = -1;
+        if (active_client_socket != -1 && FD_ISSET(active_client_socket, &read_fds)) {
+            char buffer[BUF_SIZE];
+            ssize_t bytes_received = recv(active_client_socket, buffer, BUF_SIZE - 1, 0);
+            if (bytes_received > 0) {
+                buffer[bytes_received] = '\0';
+                std::cout << "Получено " << bytes_received << " байт: " << buffer << std::endl;
+            } else if (bytes_received == 0) {
+
+                std::cout << "Клиент закрыл соединение." << std::endl;
+                shutdown_socket(active_client_socket);
+                active_client_socket = -1;
             } else {
-                perror("Ошибка чтения данных");
+                perror("Ошибка при получении данных");
             }
         }
     }
 
-    close_socket(server_fd);
+    shutdown_socket(server_socket);
     return 0;
 }
