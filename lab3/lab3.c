@@ -3,7 +3,7 @@
 #include <linux/init.h>
 #include <linux/printk.h>
 
-MODULE_AUTHOR("flametoxic");
+MODULE_AUTHOR("jeffers1n");
 MODULE_DESCRIPTION("Tomsk State University Kernel Module");
 
 static int __init tsu_init(void) {
