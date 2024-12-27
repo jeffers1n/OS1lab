@@ -16,17 +16,17 @@ static struct proc_dir_entry *proc_file = NULL;
 static struct timespec64 start_time;
 
 // Функция для вычисления количества дней
-static long days_since_2012(void) {
+static long minutes_since_1997(void) {
     struct timespec64 current_time;
     long long diff_sec;
-    long long days;
+    long long minutes;
 
     ktime_get_real_ts64(&current_time); 
 
     diff_sec = current_time.tv_sec - start_time.tv_sec; 
-    days = diff_sec / (60 * 60 * 24); 
+    minutes = diff_sec / (60); 
 
-    return days;
+    return minutes;
 }
 
 
@@ -34,14 +34,14 @@ static ssize_t proc_read(struct file *file, char __user *buffer, size_t len, lof
 {
     char output[32];
     size_t output_len;
-    long days;
+    long minutes;
 
     if (*offset > 0)
         return 0;
 
-    days = days_since_2012(); 
+    minutes = minutes_since_1997(); 
 
-    output_len = snprintf(output, sizeof(output), "%ld\n", days); 
+    output_len = snprintf(output, sizeof(output), "%ld\n", minutes); 
     if (copy_to_user(buffer, output, output_len))
         return -EFAULT;
 
@@ -66,10 +66,10 @@ static int __init tsu_init(void)
     time64_t start_time_sec;
 
     // Заполняем структуру tm для начальной даты
-    start_tm.tm_year = 2012 - 1900;
-    start_tm.tm_mon = 12 - 1;
-    start_tm.tm_mday = 23;
-    start_tm.tm_hour = 0;
+    start_tm.tm_year = 1997 - 1900;
+    start_tm.tm_mon = 8 - 1 ;
+    start_tm.tm_mday = 29;
+    start_tm.tm_hour = 12;
     start_tm.tm_min = 0;
     start_tm.tm_sec = 0;
     
