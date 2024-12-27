@@ -8,7 +8,7 @@
 #include <linux/time.h>
 
 MODULE_DESCRIPTION("Tomsk State University Kernel Module");
-MODULE_AUTHOR("flametoxic");
+MODULE_AUTHOR("jeffers1n");
 
 #define PROCFS_NAME "tsulab"
 
