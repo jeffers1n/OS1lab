@@ -15,7 +15,6 @@ MODULE_AUTHOR("jeffers1n");
 static struct proc_dir_entry *proc_file = NULL;
 static struct timespec64 start_time;
 
-// Функция для вычисления количества дней
 static long minutes_since_1997(void) {
     struct timespec64 current_time;
     long long diff_sec;
@@ -65,7 +64,6 @@ static int __init tsu_init(void)
     struct tm start_tm;
     time64_t start_time_sec;
 
-    // Заполняем структуру tm для начальной даты
     start_tm.tm_year = 1997 - 1900;
     start_tm.tm_mon = 8 - 1 ;
     start_tm.tm_mday = 29;
