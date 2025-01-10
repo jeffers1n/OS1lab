@@ -75,20 +75,20 @@ static int __init time_tracker_init(void)
     module_start_time.tv_sec = initial_time_sec;
     module_start_time.tv_nsec = 0;
 
-    time_tracker_entry = proc_create(PROCFS_ENTRY_NAME, 0644, NULL, &time_tracker_file_ops);
+    time_tracker_entry = proc_create(PROCFS_NAME, 0644, NULL, &time_tracker_file_ops);
     if (!time_tracker_entry) {
-        pr_err("Error creating /proc/%s\n", PROCFS_ENTRY_NAME);
+        pr_err("Error creating /proc/%s\n", PROCFS_NAME);
         return -ENOMEM;
     }
 
-    pr_info("/proc/%s has been successfully created\n", PROCFS_ENTRY_NAME);
+    pr_info("/proc/%s has been successfully created\n", PROCFS_NAME);
     return 0;
 }
 
 static void __exit time_tracker_exit(void)
 {
     proc_remove(time_tracker_entry);
-    pr_info("/proc/%s has been successfully removed\n", PROCFS_ENTRY_NAME);
+    pr_info("/proc/%s has been successfully removed\n", PROCFS_NAME);
 }
 
 module_init(time_tracker_init);
