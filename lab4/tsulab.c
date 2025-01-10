@@ -10,88 +10,94 @@
 MODULE_DESCRIPTION("Tomsk State University Kernel Module");
 MODULE_AUTHOR("jeffers1n");
 
-#define PROCFS_FILE_NAME "tsulab"
+#define PROCFS_NAME "tsulab"
 
-static struct proc_dir_entry *time_tracker_entry = NULL;
-static struct timespec64 module_start_time;
+static struct proc_dir_entry *proc_file = NULL;
+static struct timespec64 start_time;
 
-static long calculate_time_difference(void) {
+static long minutes_since_1997(void) {
     struct timespec64 current_time;
-    long long seconds_difference;
-    long long total_minutes;
+    long long diff_sec;
+    long long minutes;
 
     ktime_get_real_ts64(&current_time); 
 
-    seconds_difference = current_time.tv_sec - module_start_time.tv_sec; 
-    total_minutes = seconds_difference / 60; 
+    diff_sec = current_time.tv_sec - start_time.tv_sec; 
+    minutes = diff_sec / (60); 
 
-    return total_minutes;
+    return minutes;
 }
 
-static ssize_t time_tracker_read(struct file *file, char __user *buffer, size_t len, loff_t *offset)
+
+static ssize_t proc_read(struct file *file, char __user *buffer, size_t len, loff_t *offset)
 {
-    char output_buffer[32];
-    size_t output_size;
-    long minutes_elapsed;
+    char output[32];
+    size_t output_len;
+    long minutes;
 
     if (*offset > 0)
         return 0;
 
-    minutes_elapsed = calculate_time_difference(); 
+    minutes = minutes_since_1997(); 
 
-    output_size = snprintf(output_buffer, sizeof(output_buffer), "%ld\n", minutes_elapsed); 
-    if (copy_to_user(buffer, output_buffer, output_size))
+    output_len = snprintf(output, sizeof(output), "%ld\n", minutes); 
+    if (copy_to_user(buffer, output, output_len))
         return -EFAULT;
 
-    *offset += output_size;
-    return output_size;
+    *offset += output_len;
+    return output_len;
 }
 
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
-static const struct proc_ops time_tracker_file_ops = {
-    .proc_read = time_tracker_read,
+static const struct proc_ops proc_file_ops = {
+    .proc_read = proc_read,
 };
 #else
-static const struct file_operations time_tracker_file_ops = {
-    .read = time_tracker_read,
+static const struct file_operations proc_file_ops = {
+    .read = proc_read,
 };
 #endif
 
-static int __init time_tracker_init(void)
+static int __init tsu_init(void)
 {
-    struct tm initial_time;
-    time64_t initial_time_sec;
+    struct tm start_tm;
+    time64_t start_time_sec;
 
-    initial_time.tm_year = 1997 - 1900;
-    initial_time.tm_mon = 8 - 1;
-    initial_time.tm_mday = 29;
-    initial_time.tm_hour = 12;
-    initial_time.tm_min = 0;
-    initial_time.tm_sec = 0;
+    start_tm.tm_year = 1997 - 1900;
+    start_tm.tm_mon = 8 - 1 ;
+    start_tm.tm_mday = 29;
+    start_tm.tm_hour = 12;
+    start_tm.tm_min = 0;
+    start_tm.tm_sec = 0;
+    
+    
+    start_time_sec = mktime64(start_tm.tm_year + 1900, start_tm.tm_mon + 1, start_tm.tm_mday,
+                             start_tm.tm_hour, start_tm.tm_min, start_tm.tm_sec);
 
-    initial_time_sec = mktime64(initial_time.tm_year + 1900, initial_time.tm_mon + 1, initial_time.tm_mday,
-                                 initial_time.tm_hour, initial_time.tm_min, initial_time.tm_sec);
 
-    module_start_time.tv_sec = initial_time_sec;
-    module_start_time.tv_nsec = 0;
+    start_time.tv_sec = start_time_sec;
+    start_time.tv_nsec = 0;
 
-    time_tracker_entry = proc_create(PROCFS_ENTRY_NAME, 0644, NULL, &time_tracker_file_ops);
-    if (!time_tracker_entry) {
-        pr_err("Error creating /proc/%s\n", PROCFS_ENTRY_NAME);
+
+
+    proc_file = proc_create(PROCFS_NAME, 0644, NULL, &proc_file_ops);
+    if (!proc_file) {
+        pr_err("Failed to create /proc/%s\n", PROCFS_NAME);
         return -ENOMEM;
     }
 
-    pr_info("/proc/%s has been successfully created\n", PROCFS_ENTRY_NAME);
+    pr_info("/proc/%s created\n", PROCFS_NAME);
     return 0;
 }
 
-static void __exit time_tracker_exit(void)
+static void __exit tsu_exit(void)
 {
-    proc_remove(time_tracker_entry);
-    pr_info("/proc/%s has been successfully removed\n", PROCFS_ENTRY_NAME);
+    proc_remove(proc_file);
+    pr_info("/proc/%s removed\n", PROCFS_NAME);
 }
 
-module_init(time_tracker_init);
-module_exit(time_tracker_exit);
+module_init(tsu_init);
+module_exit(tsu_exit);
 
 MODULE_LICENSE("GPL");
